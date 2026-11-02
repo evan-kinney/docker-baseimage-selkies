@@ -1,5 +1,10 @@
 #!/usr/bin/with-contenv bash
 
+# multi-user sessions run their own desktop
+if [[ "${MULTI_USER,,}" == "true" ]]; then
+  exec sleep infinity
+fi
+
 # wayland entrypoint
 if [[ "${PIXELFLUX_WAYLAND,,}" == "true" ]]; then
   SOCKET_PATH="${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY:-wayland-1}"

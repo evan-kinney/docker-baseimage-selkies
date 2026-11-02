@@ -1,5 +1,10 @@
 #!/usr/bin/with-contenv bash
 
+# multi-user sessions run their own selkies
+if [[ "${MULTI_USER,,}" == "true" ]]; then
+  exec sleep infinity
+fi
+
 export XCURSOR_THEME=breeze_cursors
 
 # Default sink setup

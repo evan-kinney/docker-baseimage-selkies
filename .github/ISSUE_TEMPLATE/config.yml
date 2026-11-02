@@ -1,13 +1,9 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Discord chat support
-    url: https://linuxserver.io/discord
-    about: Realtime support / chat with the community and the team.
+  - name: Discussions
+    url: https://github.com/evan-kinney/docker-baseimage-selkies/discussions
+    about: Questions and help with this fork. Please do not ask LinuxServer.io for support with it.
 
-  - name: Github Discussions
-    url: https://github.com/orgs/linuxserver/discussions
-    about: Post on our community forum.
-
-  - name: Documentation
-    url: https://docs.linuxserver.io
-    about: Documentation - information about all of our containers.
+  - name: Upstream Selkies documentation
+    url: https://docs.linuxserver.io/selkies/
+    about: Documentation for everything this fork shares with the LinuxServer.io base image.

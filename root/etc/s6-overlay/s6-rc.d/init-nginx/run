@@ -25,7 +25,11 @@ if [ ! -f "/config/ssl/cert.pem" ]; then
 fi
 
 # modify nginx config
-cp /defaults/default.conf ${NGINX_CONFIG}
+if [[ "${MULTI_USER,,}" == "true" ]]; then
+  cp /defaults/default-multiuser.conf ${NGINX_CONFIG}
+else
+  cp /defaults/default.conf ${NGINX_CONFIG}
+fi
 sed -i "s/3000/$CPORT/g" ${NGINX_CONFIG}
 sed -i "s/3001/$CHPORT/g" ${NGINX_CONFIG}
 sed -i "s/CWS/$CWS/g" ${NGINX_CONFIG}
@@ -34,7 +38,7 @@ s6-setuidgid abc mkdir -p ${FILE_MANAGER_PATH}
 if [ -n "${DISABLE_IPV6}" ]; then
   sed -i '/listen \[::\]/d' ${NGINX_CONFIG}
 fi
-if [ -n "${PASSWORD}" ]; then
+if [ -n "${PASSWORD}" ] && [[ "${MULTI_USER,,}" != "true" ]]; then
   printf '%s:%s\n' "${CUSER}" "$(openssl passwd -apr1 "${PASSWORD}")" > /etc/nginx/.htpasswd
   sed -i 's/#//g' ${NGINX_CONFIG}
 fi

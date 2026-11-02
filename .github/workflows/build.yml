@@ -1,0 +1,188 @@
+name: Build
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - '**.md'
+      - '.github/ISSUE_TEMPLATE/**'
+  pull_request:
+    branches: [master]
+  # weekly rebuild to pick up Debian and upstream component updates
+  schedule:
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: evandashkinney/baseimage-selkies
+  TAG: debiantrixie
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      build_date: ${{ steps.version.outputs.build_date }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # s6 refuses to run a service whose run file is not executable
+      - name: Check executable bits
+        run: |
+          bad="$(git ls-files -s root | awk '$1 != "100755" && ($4 ~ /\/(run|finish|check)$/ || $4 ~ /^root\/usr\/local\/bin\//) {print $4}')"
+          if [ -n "${bad}" ]; then
+            echo "::error::These files must be committed executable (git add --chmod=+x <file>):"
+            echo "${bad}"
+            exit 1
+          fi
+
+      - name: Version
+        id: version
+        run: |
+          echo "version=${TAG}-$(date -u +%Y%m%d)-${GITHUB_SHA::7}" >> "${GITHUB_OUTPUT}"
+          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
+
+  build:
+    name: Build ${{ matrix.arch }}
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+            dockerfile: Dockerfile
+          - arch: arm64v8
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            dockerfile: Dockerfile.aarch64
+    runs-on: ${{ matrix.runner }}
+    env:
+      ARCH_TAG: ${{ matrix.arch }}-debiantrixie
+      ARCH_VERSION: ${{ matrix.arch }}-${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # the image is several GB, make room on the runner
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af > /dev/null
+          df -h /
+
+      - uses: docker/setup-buildx-action@v3
+
+      # no layer cache on purpose, every build pulls fresh packages like the weekly rebuild expects
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platform }}
+          pull: true
+          load: true
+          tags: |
+            ${{ env.IMAGE }}:${{ env.ARCH_TAG }}
+            ${{ env.IMAGE }}:${{ env.ARCH_VERSION }}
+          build-args: |
+            BUILD_DATE=${{ needs.prepare.outputs.build_date }}
+            VERSION=${{ needs.prepare.outputs.version }}
+          labels: |
+            org.opencontainers.image.title=baseimage-selkies
+            org.opencontainers.image.description=Selkies base image with multi-user Active Directory support
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+            org.opencontainers.image.created=${{ needs.prepare.outputs.build_date }}
+
+      - name: Smoke test single-user
+        run: |
+          docker run -d --name single --shm-size=1g -p 3001:3001 \
+            -e PUID=1000 -e PGID=1000 -e START_DOCKER=false \
+            "${IMAGE}:${ARCH_TAG}"
+          for _ in $(seq 90); do
+            docker logs single 2>&1 | grep -q '\[ls.io-init\] done' && break
+            sleep 2
+          done
+          docker logs single 2>&1 | grep -q '\[ls.io-init\] done' || { docker logs single; exit 1; }
+          for _ in $(seq 30); do
+            curl -skf -o /dev/null https://localhost:3001/api/health && break
+            sleep 2
+          done
+          curl -skf -o /dev/null https://localhost:3001/ || { docker logs single; exit 1; }
+          curl -skf -o /dev/null https://localhost:3001/api/health || { docker logs single; exit 1; }
+          docker rm -f single
+
+      # no directory server in CI, this checks the multi-user init and service wiring only
+      - name: Smoke test multi-user
+        run: |
+          docker run -d --name multi --shm-size=1g -p 3002:3001 \
+            -e PUID=1000 -e PGID=1000 -e START_DOCKER=false \
+            -e MULTI_USER=true \
+            -e LDAP_URI=ldaps://dc.invalid \
+            -e LDAP_BASE_DN=DC=example,DC=com \
+            -e LDAP_BIND_DN=CN=ci,DC=example,DC=com \
+            -e LDAP_BIND_PASSWORD=ci \
+            "${IMAGE}:${ARCH_TAG}"
+          for _ in $(seq 90); do
+            docker logs multi 2>&1 | grep -q '\[ls.io-init\] done' && break
+            sleep 2
+          done
+          docker logs multi 2>&1 | grep -q '\[ls.io-init\] done' || { docker logs multi; exit 1; }
+          for _ in $(seq 15); do
+            docker exec multi test -S /run/selkies-broker.sock && break
+            sleep 2
+          done
+          docker exec multi test -S /run/selkies-broker.sock || { docker logs multi; exit 1; }
+          docker exec multi pgrep -x sssd > /dev/null || { docker logs multi; exit 1; }
+          status="$(curl -sk -o /dev/null -w '%{http_code}' https://localhost:3002/)"
+          [ "${status}" = "401" ] || { echo "expected 401 without a login, got ${status}"; docker logs multi; exit 1; }
+          docker rm -f multi
+
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push
+        if: github.event_name != 'pull_request'
+        run: |
+          docker push "${IMAGE}:${ARCH_TAG}"
+          docker push "${IMAGE}:${ARCH_VERSION}"
+
+  manifest:
+    name: Publish multi-arch tags
+    needs: [prepare, build]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create manifests
+        run: |
+          for tag in "${TAG}" "${VERSION}"; do
+            docker buildx imagetools create -t "${IMAGE}:${tag}" \
+              "${IMAGE}:amd64-${VERSION}" \
+              "${IMAGE}:arm64v8-${VERSION}"
+          done
+          docker buildx imagetools inspect "${IMAGE}:${TAG}"

@@ -1,6 +1,6 @@
 #!/usr/bin/with-contenv bash
 
-if [[ ${RESTART_APP,,} != "true" ]]; then
+if [[ ${RESTART_APP,,} != "true" ]] || [[ "${MULTI_USER,,}" == "true" ]]; then
   exec sleep infinity
 fi
 

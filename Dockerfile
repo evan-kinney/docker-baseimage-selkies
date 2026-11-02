@@ -188,14 +188,17 @@ RUN \
     libgnutls30 \
     libgtk-3.0 \
     libjpeg62-turbo \
+    libnginx-mod-http-auth-pam \
     libnginx-mod-http-fancyindex \
     libnotify-bin \
     libnss3 \
+    libnss-sss \
     libnvidia-egl-wayland1 \
     libnvidia-egl-gbm1 \
     libopus0 \
     libp11-kit0 \
     libpam0g \
+    libpam-sss \
     libtasn1-6 \
     libvulkan1 \
     libwayland-client0 \
@@ -239,6 +242,8 @@ RUN \
     python3-venv \
     python3-gi \
     ssl-cert \
+    sssd-ldap \
+    sssd-tools \
     stterm \
     sudo \
     tar \
@@ -375,6 +380,7 @@ COPY --from=interposers /buildout /
 COPY --from=ghcr.io/linuxserver/selkies-layers:amd64-debiantrixie-xvfb / /
 COPY --from=ghcr.io/linuxserver/selkies-layers:amd64-debiantrixie-wtype / /
 COPY --from=ghcr.io/linuxserver/selkies-layers:amd64-debiantrixie-labwc / /
+COPY --from=ghcr.io/evan-kinney/selkies-layers:amd64-debiantrixie-multiuser / /
 
 # ports and volumes
 EXPOSE 3000 3001
